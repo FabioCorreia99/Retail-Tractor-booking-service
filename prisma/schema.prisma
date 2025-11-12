@@ -1,0 +1,34 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Booking {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId        // Referência ao utilizador que faz a reserva
+  equipmentId    String   @db.ObjectId        // Referência ao equipamento alugado
+  startDate      DateTime
+  endDate        DateTime
+  totalPrice     Float
+  status         BookingStatus @default(PENDING)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  paymentId      String?  @db.ObjectId        // ligação ao serviço de pagamentos
+}
+
+enum BookingStatus {
+  PENDING     // Reserva criada, mas pagamento/validação pendente
+  CONFIRMED   // Reserva confirmada (pagamento aceite)
+  CANCELLED   // Reserva cancelada
+  COMPLETED   // Reserva concluída (período finalizado)
+}

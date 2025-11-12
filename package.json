@@ -1,0 +1,31 @@
+{
+  "name": "retail-tractor-booking-service",
+  "version": "1.0.0",
+  "description": "microservice Booking",
+  "homepage": "https://github.com/FabioCorreia99/Retail-Tractor-booking-service#readme",
+  "bugs": {
+    "url": "https://github.com/FabioCorreia99/Retail-Tractor-booking-service/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FabioCorreia99/Retail-Tractor-booking-service.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "express": "^5.1.0",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "swagger-autogen": "^2.23.7",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  }
+}
