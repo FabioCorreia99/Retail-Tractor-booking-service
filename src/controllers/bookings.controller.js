@@ -137,4 +137,19 @@ async function getAllBookings(req, res) {
     }
 }
 
-module.exports = { testeUserToken, updateBookingStatus, createBooking, getAllBookings };
+async function getBookingById(req, res) {
+    const bookingId = req.params.id;
+    try {
+        const booking = await prisma.bookings.findUnique({
+            where: { id: bookingId }
+        });
+        if (!booking) {
+            return res.status(404).json({ error: "Booking not found." });
+        }
+        res.json(booking);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to retrieve booking." });
+    }
+}
+
+module.exports = { testeUserToken, updateBookingStatus, createBooking, getAllBookings, getBookingById };
