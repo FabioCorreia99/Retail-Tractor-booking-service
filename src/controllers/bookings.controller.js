@@ -203,6 +203,7 @@ async function deleteBooking(req, res) {
 }
 
 async function getBookingsByUserId(req, res) {
+    logger.info("getBookingsByUserId called");
     const { page, limit, offset } = req.pagination;
     const userId = parseInt(req.params.userId);
 
@@ -261,4 +262,82 @@ async function getBookingsByUserId(req, res) {
     }
 }
 
-module.exports = { deleteBooking ,testeUserToken, updateBookingStatus, createBooking, getAllBookings, getBookingById, getBookingsByUserId };
+async function getBookingsByEquipmentId(req, res) {
+    const { page, limit, offset } = req.pagination;
+
+    logger.info("getBookingsByEquipmentId called");
+    const equipmentId = parseInt(req.params.equipmentId);
+
+    /**
+     *  Check if the equipment exists by calling the Inventory Service 
+     */
+
+    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(0);
+    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+
+    let filters = {};
+    if (req.query.status) {
+        if (['pending', 'confirmed', 'cancelled', 'completed'].includes(req.query.status)) {
+            logger.info(`Filtering bookings by status: ${req.query.status}`);
+            filters.status = req.query.status;
+        } else {
+            logger.warn(`Invalid status filter attempted: ${req.query.status}`);
+            return res.status(400).json({ error: "Invalid status filter." });
+        }
+    }
+    if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
+        logger.warn("Invalid date range provided for filtering bookings.");
+        return res.status(400).json({ error: "Invalid startDate or endDate." });
+    }
+
+    try {
+        logger.info(`Retrieving bookings for userId: ${userId}, page: ${page}, limit: ${limit}`);
+        const total = await prisma.bookings.count({
+            where: { 
+                equipmentId: equipmentId, 
+                startDate: { gte: startDate },
+                endDate: { lte: endDate },
+                ...filters
+             }
+        });
+        const totalPages = Math.ceil(total / limit);
+        if (page > totalPages && totalPages !== 0) {
+            logger.warn("Page number exceeds total pages.");
+            return res.status(400).json({ error: "Page number exceeds total pages." });
+        }
+        logger.info(`Retrieving bookings for equipmentId: ${equipmentId}`);
+        const bookings = await prisma.bookings.findMany({
+            skip: offset,
+            take: limit,
+            where: { 
+                equipmentId: equipmentId,
+                startDate: { gte: startDate },
+                endDate: { lte: endDate },
+                ...filters
+            }
+        });
+        logger.info(`Retrieved ${bookings.length} bookings for equipmentId: ${equipmentId}.`);
+        res.json({
+            page,
+            limit,
+            total,
+            totalPages,
+            data: bookings
+        });
+    }
+    catch (error) {
+        logger.error(`Error retrieving bookings for equipmentId: ${equipmentId} - ${error.message}`);
+        res.status(500).json({ error: "Failed to retrieve bookings." });
+    }
+}
+
+module.exports = { 
+    deleteBooking,
+    testeUserToken, 
+    updateBookingStatus, 
+    createBooking, 
+    getAllBookings, 
+    getBookingById, 
+    getBookingsByUserId,
+    getBookingsByEquipmentId,
+    };
