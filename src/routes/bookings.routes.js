@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bookingsController = require('../controllers/bookings.controller.js');
 const { authenticateUserToken, authenticateBookingToken } = require("../middlewares/auth");
-const { ensureSameUser } = require("../middlewares/ensureSameUser");
+const { ensureSameUser, ensureUserIsAdmin } = require("../middlewares/ensureSameUser");
 const { paginationMiddleware } = require("../middlewares/pagination");
 
 // Define your booking routes here
@@ -15,7 +15,7 @@ router.get('/:id',authenticateUserToken, bookingsController.getBookingById);
 
 router.put('/:id/status', authenticateBookingToken, bookingsController.updateBookingStatus);
 
-router.delete('/:id', authenticateUserToken, /*middleware for admin authentication ,*/ bookingsController.deleteBooking); // ADMIN only
+router.delete('/:id', authenticateUserToken, ensureUserIsAdmin, bookingsController.deleteBooking); // ADMIN only
 
 router.get('/user/:userId', authenticateUserToken, ensureSameUser, paginationMiddleware, bookingsController.getBookingsByUserId);
 

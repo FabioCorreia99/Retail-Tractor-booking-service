@@ -1,4 +1,3 @@
-
 const { request } = require("express");
 const { generateBookingToken } = require("../utils/token");
 const prisma = require("../config/db"); // Import prisma instance
