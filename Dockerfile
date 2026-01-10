@@ -7,6 +7,9 @@ RUN npm install
 
 COPY . .
 
+# gerar prisma no build
+RUN npx prisma generate
+
 EXPOSE 3002
 
 CMD ["npm", "start"]
