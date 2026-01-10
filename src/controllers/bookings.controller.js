@@ -114,27 +114,43 @@ async function createBooking(req, res) {
         return res.status(400).json({ error: "Invalid startDate or endDate." });
     }
 
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+        logger.warn("createBooking: No Authorization header provided.");
+        return res.status(401).json({ error: "Authentication required to book equipment." });
+    }
+
     try {
-        const inventoryResponse = await axios.post('http://localhost:3001/graphql', {
+        logger.info(`Fetching equipment ${equipmentId} from Inventory Service...`);
+
+        const inventoryResponse = await axios.post('http://inventory-service:3001/graphql', {
             query: `
-            query Item {
+            query Item($id: ID!) {
                 item(id: $id) {
                     id
                     name
                     pricePerDay
                 }
             }`,
-            variables: { id: equipmentId }
+            variables: { id: parseInt(equipmentId) }
+        }, {
+            // Reenvia o token exato que recebemos do Postman
+            headers: { 
+                'Authorization': authHeader,
+                'Content-Type': 'application/json'
+            }
         });
 
+        if (inventoryResponse.data.errors) {
+            throw new Error(inventoryResponse.data.errors[0].message);
+        }
         console.log(inventoryResponse);
         
-        if (!inventoryResponse.data.data.equipment) {
-            logger.warn(`Equipment with ID: ${equipmentId} not found in Inventory Service.`);
+        if (!inventoryResponse.data.data || !inventoryResponse.data.data.item) {
             return res.status(404).json({ error: "Equipment not found." });
         }
 
-        equipmentData = inventoryResponse.data.data.equipment;
+        equipmentData = inventoryResponse.data.data.item;
 
         logger.info(`Checking availability for equipmentId: ${equipmentId} from ${start} to ${end}`);
         const count = await prisma.bookings.count({
@@ -152,7 +168,10 @@ async function createBooking(req, res) {
         }
     } catch (error) {
         logger.error(`Error checking equipment availability: ${error.message}`);
-        res.status(500).json({ error: "Failed to create booking." });
+        if (error.response) {
+             return res.status(error.response.status).json({ error: "Failed to communicate with Inventory Service" });
+        }
+        return res.status(500).json({ error: "Internal Server Error." });
     }    
 
     const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
@@ -171,18 +190,64 @@ async function createBooking(req, res) {
         });
         logger.info(`Booking created successfully with ID: ${newBooking.id}`);
 
-        const internalToken = generateBookingToken({ 
-            ...newBooking,
-            role: "internal" 
+        // logger.info("Generating internal booking token for Payments Service...");
+        // const internalToken = generateBookingToken({ 
+        //     bookingId: newBooking.id, 
+        //     userId: req.user.sub,
+        //     role: "internal" 
+        // });
+
+        let checkoutUrl = null; 
+
+        const postParaPagamento = {
+            title: `Booking #${newBooking.id} - Equipment: ${equipmentId} - ${equipmentData.name}`,
+            description: `Rental from ${startDate} to ${endDate}. Total days: ${totalDays}`,
+            price: totalPrice,
+            currency: "EUR",
+            status: "PENDING_PAYMENT"
+        };
+
+        logger.info("A enviar dados para o serviço de Pagamentos (Criar Post Temporário)...");
+
+        const createPostResponse = await axios.post(
+            'http://payments-service:8080/payments/posts', 
+            postParaPagamento,
+            {
+                headers: {
+                    'Authorization': req.headers.authorization,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const createdPostId = createPostResponse.data.id;
+        logger.info(`Post temporário criado com ID: internalToken: ${createdPostId}`);
+
+            // 2. SEGUNDO: Gerar o link de pagamento para esse Post
+            // Agora chamas o endpoint /buy que o teu colega já tem
+        const buyResponse = await axios.get(
+            `http://payments-service:8080/payments/posts/${createdPostId}/buy`,
+            {
+                headers: {
+                    'Authorization': req.headers.authorization,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const stripeUrl = buyResponse.data.url;
+        logger.info(`Link de pagamento gerado: ${stripeUrl}`);
+
+            // Retornas ao teu frontend o link para o user pagar
+        res.status(201).json({
+            booking: newBooking,
+            paymentUrl: stripeUrl
         });
 
-        // payments service call could be added here
-
-        res.status(201).json(newBooking); // mudar
-
-
     } catch (error) {
-        logger.error(`Error creating booking: ${error.message}`);
+        // ... teu tratamento de erro ...
+        logger.error(`Erro no processo de pagamento: ${error.message}`);
+        // Podes querer apagar a booking se falhar o pagamento
         res.status(500).json({ error: "Failed to create booking." });
     }
 };

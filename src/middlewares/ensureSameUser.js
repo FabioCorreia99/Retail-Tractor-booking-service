@@ -16,7 +16,7 @@ async function ensureUserIsAdmin(req, res, next) {
 
     try {
         logger.info("Fetching user role for authorization check.");
-        const response = await axios.get(`http://localhost:3003/users/${requesterId}`, {
+        const response = await axios.get(`http://users-service:3003/users/${requesterId}`, {
         headers: {
             Authorization: req.headers.authorization
         }
