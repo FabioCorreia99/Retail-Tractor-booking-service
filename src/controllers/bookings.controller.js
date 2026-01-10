@@ -1,130 +1,148 @@
 const { request } = require("express");
+const { publishEmailEvent } = require("../rabbitmq/publisher");
 const { generateBookingToken } = require("../utils/token");
 const prisma = require("../config/db"); // Import prisma instance
 const logger = require("../utils/logger");
 const axios = require("axios");
 
 async function updateBookingStatus(req, res) {
-    const bookingId = req.params.id;
-    const { status, notes } = req.body;
-    // Atualizar o status da reserva no banco de dados
-    logger.info(`Updating booking ID: ${bookingId} to status: ${status}`);
+  const bookingId = req.params.id;
+  const { status, notes } = req.body;
+  // Atualizar o status da reserva no banco de dados
+  logger.info(`Updating booking ID: ${bookingId} to status: ${status}`);
 
-    if (!['pending', 'confirmed', 'cancelled', 'completed'].includes(status)) {
-        logger.warn(`Invalid status value attempted: ${status}`);
-        return res.status(400).json({ error: "Invalid status value." });
-    }
+  if (!["pending", "confirmed", "cancelled", "completed"].includes(status)) {
+    logger.warn(`Invalid status value attempted: ${status}`);
+    return res.status(400).json({ error: "Invalid status value." });
+  }
 
-    if (status === 'cancelled' && (!notes || notes.trim() === '')) {
-        logger.warn("Cancellation attempted without providing notes.");
-        return res.status(400).json({ error: "Notes are required when cancelling a booking." });
-    }
+  if (status === "cancelled" && (!notes || notes.trim() === "")) {
+    logger.warn("Cancellation attempted without providing notes.");
+    return res
+      .status(400)
+      .json({ error: "Notes are required when cancelling a booking." });
+  }
 
-    // Update the booking status in the database
-    try {
-        await prisma.bookings.update({
-            where: { id: bookingId },
-            data: { status, notes }
-        });
-    } catch (error) {
-        logger.error(`Error updating booking status: ${error.message}`);
-        return res.status(500).json({ error: "Failed to update booking status." });
-    }
-
-    res.json({
-        message: "Booking status updated successfully."
+  // Update the booking status in the database
+  try {
+    await prisma.bookings.update({
+      where: { id: bookingId },
+      data: { status, notes },
     });
+
+    if (status === "cancelled") {
+      await publishEmailEvent({
+        to: req.user.email,
+        subject: "Booking cancelled",
+        message: `Your booking #${bookingId} was cancelled. Reason: ${notes}`,
+      });
+    }
+  } catch (error) {
+    logger.error(`Error updating booking status: ${error.message}`);
+    return res.status(500).json({ error: "Failed to update booking status." });
+  }
+
+  res.json({
+    message: "Booking status updated successfully.",
+  });
 }
 
 async function checkAvailability(req, res) {
-    const { equipmentId, startDate, endDate } = req.body;
+  const { equipmentId, startDate, endDate } = req.body;
 
-    if (!equipmentId || !startDate || !endDate) {
-        return res.status(400).json({ error: "Missing required fields." });
-    }
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+  if (!equipmentId || !startDate || !endDate) {
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-    if (isNaN(start) || isNaN(end) || start >= end) {
-        logger.warn("Invalid date range provided for booking.");
-        return res.status(400).json({ error: "Invalid startDate or endDate." });
-    }
+  if (isNaN(start) || isNaN(end) || start >= end) {
+    logger.warn("Invalid date range provided for booking.");
+    return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
 
-    try {
-        const inventoryResponse = await axios.post('http://localhost:3001/graphql', {
-            query: `
+  try {
+    const inventoryResponse = await axios.post(
+      "http://localhost:3001/graphql",
+      {
+        query: `
             query Item {
                 item(id: $id) {
                     id
                 }
             }`,
-            variables: { id: equipmentId }
-        });
+        variables: { id: equipmentId },
+      }
+    );
 
-        console.log(inventoryResponse);
-        
-        if (!inventoryResponse.data.data.equipment) {
-            logger.warn(`Equipment with ID: ${equipmentId} not found in Inventory Service.`);
-            return res.status(404).json({ error: "Equipment not found." });
-        }
+    console.log(inventoryResponse);
 
+    if (!inventoryResponse.data.data.item) {
+      logger.warn(
+        `Equipment with ID: ${equipmentId} not found in Inventory Service.`
+      );
+      return res.status(404).json({ error: "Equipment not found." });
+    }
 
-        logger.info(`Checking availability for equipmentId: ${equipmentId} from ${start} to ${end}`);
-        const count = await prisma.bookings.count({
-            where: {
-                equipmentId: equipmentId,
-                AND: [
-                    { startDate: { lte: end } },
-                    { endDate: { gte: start } }
-                ]
-            }
-        });
-        if (count > 0) {
-            logger.warn("Equipment is not available for the selected dates.");
-            return res.status(400).json({ 
-                available: false,
-                error: "Equipment is not available for the selected dates."
-            });
-        }
+    logger.info(
+      `Checking availability for equipmentId: ${equipmentId} from ${start} to ${end}`
+    );
+    const count = await prisma.bookings.count({
+      where: {
+        equipmentId: equipmentId,
+        AND: [{ startDate: { lte: end } }, { endDate: { gte: start } }],
+      },
+    });
+    if (count > 0) {
+      logger.warn("Equipment is not available for the selected dates.");
+      return res.status(400).json({
+        available: false,
+        error: "Equipment is not available for the selected dates.",
+      });
+    }
 
-        res.status(200).json({ available: true });
-    } catch (error) {
-        logger.error(`Error checking equipment availability: ${error.message}`);
-        res.status(500).json({ error: "Failed to check availability." });
-    }    
+    res.status(200).json({ available: true });
+  } catch (error) {
+    logger.error(`Error checking equipment availability: ${error.message}`);
+    res.status(500).json({ error: "Failed to check availability." });
+  }
 }
 
 async function createBooking(req, res) {
-    const { startDate, endDate, equipmentId } = req.body;
-    let equipmentData = null;
+  const { startDate, endDate, equipmentId } = req.body;
+  let equipmentData = null;
 
-    logger.info("createBooking called");
-    logger.info(`Request body: ${JSON.stringify(req.body)}`);
+  logger.info("createBooking called");
+  logger.info(`Request body: ${JSON.stringify(req.body)}`);
 
-    if (!startDate || !endDate || !equipmentId) {
-        logger.warn("Missing required booking fields.");
-        return res.status(400).json({ error: "Missing required booking fields." });
-    }
+  if (!startDate || !endDate || !equipmentId) {
+    logger.warn("Missing required booking fields.");
+    return res.status(400).json({ error: "Missing required booking fields." });
+  }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    
-    if (isNaN(start) || isNaN(end) || start >= end) {
-        logger.warn("Invalid date range provided for booking.");
-        return res.status(400).json({ error: "Invalid startDate or endDate." });
-    }
+  const start = new Date(startDate);
+  const end = new Date(endDate);
 
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-        logger.warn("createBooking: No Authorization header provided.");
-        return res.status(401).json({ error: "Authentication required to book equipment." });
-    }
+  if (isNaN(start) || isNaN(end) || start >= end) {
+    logger.warn("Invalid date range provided for booking.");
+    return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
 
-    try {
-        logger.info(`Fetching equipment ${equipmentId} from Inventory Service...`);
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    logger.warn("createBooking: No Authorization header provided.");
+    return res
+      .status(401)
+      .json({ error: "Authentication required to book equipment." });
+  }
 
-        const inventoryResponse = await axios.post('http://inventory-service:3001/graphql', {
-            query: `
+  try {
+    logger.info(`Fetching equipment ${equipmentId} from Inventory Service...`);
+
+    const inventoryResponse = await axios.post(
+      "http://inventory-service:3001/graphql",
+      {
+        query: `
             query Item($id: ID!) {
                 item(id: $id) {
                     id
@@ -132,379 +150,437 @@ async function createBooking(req, res) {
                     pricePerDay
                 }
             }`,
-            variables: { id: parseInt(equipmentId) }
-        }, {
-            // Reenvia o token exato que recebemos do Postman
-            headers: { 
-                'Authorization': authHeader,
-                'Content-Type': 'application/json'
-            }
-        });
+        variables: { id: parseInt(equipmentId) },
+      },
+      {
+        // Reenvia o token exato que recebemos do Postman
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
-        if (inventoryResponse.data.errors) {
-            throw new Error(inventoryResponse.data.errors[0].message);
-        }
-        console.log(inventoryResponse);
-        
-        if (!inventoryResponse.data.data || !inventoryResponse.data.data.item) {
-            return res.status(404).json({ error: "Equipment not found." });
-        }
-
-        equipmentData = inventoryResponse.data.data.item;
-
-        logger.info(`Checking availability for equipmentId: ${equipmentId} from ${start} to ${end}`);
-        const count = await prisma.bookings.count({
-            where: {
-                equipmentId: equipmentId,
-                AND: [
-                    { startDate: { lte: end } },
-                    { endDate: { gte: start } }
-                ]
-            }
-        });
-        if (count > 0) {
-            logger.warn("Equipment is not available for the selected dates.");
-            return res.status(400).json({ error: "Equipment is not available for the selected dates." });
-        }
-    } catch (error) {
-        logger.error(`Error checking equipment availability: ${error.message}`);
-        if (error.response) {
-             return res.status(error.response.status).json({ error: "Failed to communicate with Inventory Service" });
-        }
-        return res.status(500).json({ error: "Internal Server Error." });
-    }    
-
-    const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-    const totalPrice = totalDays * equipmentData.pricePerDay;
-
-    try {
-        logger.info("Creating new booking record in the database.");
-        const newBooking = await prisma.bookings.create({
-            data: {
-                userId: parseInt(req.user.sub),
-                startDate: start,
-                endDate: end,
-                equipmentId,
-                totalPrice: totalPrice
-            }
-        });
-        logger.info(`Booking created successfully with ID: ${newBooking.id}`);
-
-        // logger.info("Generating internal booking token for Payments Service...");
-        // const internalToken = generateBookingToken({ 
-        //     bookingId: newBooking.id, 
-        //     userId: req.user.sub,
-        //     role: "internal" 
-        // });
-
-        let checkoutUrl = null; 
-
-        const postParaPagamento = {
-            title: `Booking #${newBooking.id} - Equipment: ${equipmentId} - ${equipmentData.name}`,
-            description: `Rental from ${startDate} to ${endDate}. Total days: ${totalDays}`,
-            price: totalPrice,
-            currency: "EUR",
-            status: "PENDING_PAYMENT"
-        };
-
-        logger.info("A enviar dados para o serviço de Pagamentos (Criar Post Temporário)...");
-
-        const createPostResponse = await axios.post(
-            'http://payments-service:8080/payments/posts', 
-            postParaPagamento,
-            {
-                headers: {
-                    'Authorization': req.headers.authorization,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        const createdPostId = createPostResponse.data.id;
-        logger.info(`Post temporário criado com ID: internalToken: ${createdPostId}`);
-
-            // 2. SEGUNDO: Gerar o link de pagamento para esse Post
-            // Agora chamas o endpoint /buy que o teu colega já tem
-        const buyResponse = await axios.get(
-            `http://payments-service:8080/payments/posts/${createdPostId}/buy`,
-            {
-                headers: {
-                    'Authorization': req.headers.authorization,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        const stripeUrl = buyResponse.data.url;
-        logger.info(`Link de pagamento gerado: ${stripeUrl}`);
-
-            // Retornas ao teu frontend o link para o user pagar
-        res.status(201).json({
-            booking: newBooking,
-            paymentUrl: stripeUrl
-        });
-
-    } catch (error) {
-        // ... teu tratamento de erro ...
-        logger.error(`Erro no processo de pagamento: ${error.message}`);
-        // Podes querer apagar a booking se falhar o pagamento
-        res.status(500).json({ error: "Failed to create booking." });
+    if (inventoryResponse.data.errors) {
+      throw new Error(inventoryResponse.data.errors[0].message);
     }
-};
+    console.log(inventoryResponse);
+
+    if (!inventoryResponse.data.data || !inventoryResponse.data.data.item) {
+      return res.status(404).json({ error: "Equipment not found." });
+    }
+
+    equipmentData = inventoryResponse.data.data.item;
+
+    logger.info(
+      `Checking availability for equipmentId: ${equipmentId} from ${start} to ${end}`
+    );
+    const count = await prisma.bookings.count({
+      where: {
+        equipmentId: equipmentId,
+        AND: [{ startDate: { lte: end } }, { endDate: { gte: start } }],
+      },
+    });
+    if (count > 0) {
+      logger.warn("Equipment is not available for the selected dates.");
+      return res
+        .status(400)
+        .json({ error: "Equipment is not available for the selected dates." });
+    }
+  } catch (error) {
+    logger.error(`Error checking equipment availability: ${error.message}`);
+    if (error.response) {
+      return res
+        .status(error.response.status)
+        .json({ error: "Failed to communicate with Inventory Service" });
+    }
+    return res.status(500).json({ error: "Internal Server Error." });
+  }
+
+  const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+  const totalPrice = totalDays * equipmentData.pricePerDay;
+
+  try {
+    logger.info("Creating new booking record in the database.");
+    const newBooking = await prisma.bookings.create({
+      data: {
+        userId: parseInt(req.user.sub),
+        startDate: start,
+        endDate: end,
+        equipmentId,
+        totalPrice: totalPrice,
+      },
+    });
+    logger.info(`Booking created successfully with ID: ${newBooking.id}`);
+
+    await publishEmailEvent({
+      to: req.user.email,
+      subject: "Booking created successfully",
+      message: `Your booking #${newBooking.id} was created successfully.`,
+    });
+
+    // logger.info("Generating internal booking token for Payments Service...");
+    // const internalToken = generateBookingToken({
+    //     bookingId: newBooking.id,
+    //     userId: req.user.sub,
+    //     role: "internal"
+    // });
+
+    let checkoutUrl = null;
+
+    const postParaPagamento = {
+      title: `Booking #${newBooking.id} - Equipment: ${equipmentId} - ${equipmentData.name}`,
+      description: `Rental from ${startDate} to ${endDate}. Total days: ${totalDays}`,
+      price: totalPrice,
+      currency: "EUR",
+      status: "PENDING_PAYMENT",
+    };
+
+    logger.info(
+      "A enviar dados para o serviço de Pagamentos (Criar Post Temporário)..."
+    );
+
+    const createPostResponse = await axios.post(
+      "http://payments-service:8080/payments/posts",
+      postParaPagamento,
+      {
+        headers: {
+          Authorization: req.headers.authorization,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const createdPostId = createPostResponse.data.id;
+    logger.info(
+      `Post temporário criado com ID: internalToken: ${createdPostId}`
+    );
+
+    // 2. SEGUNDO: Gerar o link de pagamento para esse Post
+    // Agora chamas o endpoint /buy que o teu colega já tem
+    const buyResponse = await axios.get(
+      `http://payments-service:8080/payments/posts/${createdPostId}/buy`,
+      {
+        headers: {
+          Authorization: req.headers.authorization,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const stripeUrl = buyResponse.data.url;
+    logger.info(`Link de pagamento gerado: ${stripeUrl}`);
+
+    // Retornas ao teu frontend o link para o user pagar
+    res.status(201).json({
+      booking: newBooking,
+      paymentUrl: stripeUrl,
+    });
+  } catch (error) {
+    // ... teu tratamento de erro ...
+    logger.error(`Erro no processo de pagamento: ${error.message}`);
+    // Podes querer apagar a booking se falhar o pagamento
+    res.status(500).json({ error: "Failed to create booking." });
+  }
+}
 
 async function getAllBookings(req, res) {
-    logger.info("getAllBookings called");
-    logger.info(`Query parameters received: ${JSON.stringify(req.query)}`);
-    const { page, limit, offset } = req.pagination;
+  logger.info("getAllBookings called");
+  logger.info(`Query parameters received: ${JSON.stringify(req.query)}`);
+  const { page, limit, offset } = req.pagination;
 
-    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(0);
-    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+  const startDate = req.query.startDate
+    ? new Date(req.query.startDate)
+    : new Date(0);
+  const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
 
-    let filters = {};
-    if (req.query.status) {
-        if (['pending', 'confirmed', 'cancelled', 'completed'].includes(req.query.status)) {
-            logger.info(`Filtering bookings by status: ${req.query.status}`);
-            filters.status = req.query.status;
-        } else {
-            logger.warn(`Invalid status filter attempted: ${req.query.status}`);
-            return res.status(400).json({ error: "Invalid status filter." });
-        }
+  let filters = {};
+  if (req.query.status) {
+    if (
+      ["pending", "confirmed", "cancelled", "completed"].includes(
+        req.query.status
+      )
+    ) {
+      logger.info(`Filtering bookings by status: ${req.query.status}`);
+      filters.status = req.query.status;
+    } else {
+      logger.warn(`Invalid status filter attempted: ${req.query.status}`);
+      return res.status(400).json({ error: "Invalid status filter." });
     }
+  }
 
-    if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
-        logger.warn("Invalid date range provided for filtering bookings.");
-        return res.status(400).json({ error: "Invalid startDate or endDate." });
-    }
+  if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
+    logger.warn("Invalid date range provided for filtering bookings.");
+    return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
 
+  if (page < 1 || limit < 1) {
+    logger.warn("Invalid pagination parameters provided.");
+    return res.status(400).json({ error: "Invalid pagination parameters." });
+  }
+  if (limit > 100) {
+    logger.warn("Requested limit exceeds maximum allowed value.");
+    return res.status(400).json({ error: "Limit exceeds maximum of 100." });
+  }
+  try {
+    logger.info(
+      `Retrieving bookings with filters: ${JSON.stringify(
+        filters
+      )}, startDate: ${startDate}, endDate: ${endDate}, page: ${page}, limit: ${limit}`
+    );
+    const total = await prisma.bookings.count({
+      where: {
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    const totalPages = Math.ceil(total / limit);
 
-    if (page < 1 || limit < 1) {
-        logger.warn("Invalid pagination parameters provided.");
-        return res.status(400).json({ error: "Invalid pagination parameters." });
+    if (page > totalPages && totalPages !== 0) {
+      logger.warn("Page number exceeds total pages.");
+      return res
+        .status(400)
+        .json({ error: "Page number exceeds total pages." });
     }
-    if (limit > 100) {
-        logger.warn("Requested limit exceeds maximum allowed value.");
-        return res.status(400).json({ error: "Limit exceeds maximum of 100." });
-    }
-    try {
-        logger.info(`Retrieving bookings with filters: ${JSON.stringify(filters)}, startDate: ${startDate}, endDate: ${endDate}, page: ${page}, limit: ${limit}`);
-        const total = await prisma.bookings.count({
-            where: {
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-            }
-        });
-        const totalPages = Math.ceil(total / limit);
-
-        if (page > totalPages && totalPages !== 0) {
-            logger.warn("Page number exceeds total pages.");
-            return res.status(400).json({ error: "Page number exceeds total pages." });
-        }
-        logger.info(`Retrieving bookings for page ${page} of ${totalPages}`);
-        const bookings = await prisma.bookings.findMany({
-            skip: offset,
-            take: limit,
-            where: {
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-            },
-        });
-        logger.info(`Retrieved ${bookings.length} bookings.`);
-        return res.json({
-            page,
-            limit,
-            total,
-            totalPages,
-            data: bookings
-      });
-    } catch (error) {
-        res.status(500).json({ error: "Failed to retrieve bookings." });
-    }
+    logger.info(`Retrieving bookings for page ${page} of ${totalPages}`);
+    const bookings = await prisma.bookings.findMany({
+      skip: offset,
+      take: limit,
+      where: {
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    logger.info(`Retrieved ${bookings.length} bookings.`);
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages,
+      data: bookings,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to retrieve bookings." });
+  }
 }
 
 async function getBookingById(req, res) {
-    logger.info("getBookingById called");
-    const bookingId = req.params.id;
-    try {
-        logger.info(`Retrieving booking with ID: ${bookingId}`);
-        const booking = await prisma.bookings.findUnique({
-            where: { id: bookingId }
-        });
-        if (!booking) {
-            logger.warn(`Booking with ID: ${bookingId} not found.`);    
-            return res.status(404).json({ error: "Booking not found." });
-        }
-        logger.info(`Booking with ID: ${bookingId} retrieved successfully.`);
-        res.json(booking);
-    } catch (error) {
-        logger.error(`Error retrieving booking with ID: ${bookingId} - ${error.message}`);
-        res.status(500).json({ error: "Failed to retrieve booking." });
+  logger.info("getBookingById called");
+  const bookingId = req.params.id;
+  try {
+    logger.info(`Retrieving booking with ID: ${bookingId}`);
+    const booking = await prisma.bookings.findUnique({
+      where: { id: bookingId },
+    });
+    if (!booking) {
+      logger.warn(`Booking with ID: ${bookingId} not found.`);
+      return res.status(404).json({ error: "Booking not found." });
     }
+    logger.info(`Booking with ID: ${bookingId} retrieved successfully.`);
+    res.json(booking);
+  } catch (error) {
+    logger.error(
+      `Error retrieving booking with ID: ${bookingId} - ${error.message}`
+    );
+    res.status(500).json({ error: "Failed to retrieve booking." });
+  }
 }
 
 async function deleteBooking(req, res) {
-    const bookingId = req.params.id;
-    try {
-        logger.info(`Attempting to delete booking with ID: ${bookingId}`);
-        const booking = await prisma.bookings.findUnique({
-            where: { id: bookingId }
-        });
-        if (!booking) {
-            logger.warn(`Booking with ID: ${bookingId} not found.`);
-            return res.status(404).json({ error: "Booking not found." });
-        }
-        if (booking.status !== "cancelled"){
-            logger.warn(`Booking with ID: ${bookingId} cannot be deleted as its status is not 'cancelled'.`);
-            return res.status(400).json({ error: "Only cancelled bookings can be deleted." });
-        }
-        await prisma.bookings.delete({
-            where: { id: bookingId }
-        });
-        logger.info(`Booking with ID: ${bookingId} deleted successfully.`);
-        res.json({ message: "Booking deleted successfully." });
-    } catch (error) {
-        logger.error(`Error deleting booking with ID: ${bookingId} - ${error.message}`);
-        res.status(500).json({ error: "Failed to delete booking." });
+  const bookingId = req.params.id;
+  try {
+    logger.info(`Attempting to delete booking with ID: ${bookingId}`);
+    const booking = await prisma.bookings.findUnique({
+      where: { id: bookingId },
+    });
+    if (!booking) {
+      logger.warn(`Booking with ID: ${bookingId} not found.`);
+      return res.status(404).json({ error: "Booking not found." });
     }
+    if (booking.status !== "cancelled") {
+      logger.warn(
+        `Booking with ID: ${bookingId} cannot be deleted as its status is not 'cancelled'.`
+      );
+      return res
+        .status(400)
+        .json({ error: "Only cancelled bookings can be deleted." });
+    }
+    await prisma.bookings.delete({
+      where: { id: bookingId },
+    });
+    logger.info(`Booking with ID: ${bookingId} deleted successfully.`);
+    res.json({ message: "Booking deleted successfully." });
+  } catch (error) {
+    logger.error(
+      `Error deleting booking with ID: ${bookingId} - ${error.message}`
+    );
+    res.status(500).json({ error: "Failed to delete booking." });
+  }
 }
 
 async function getBookingsByUserId(req, res) {
-    logger.info("getBookingsByUserId called");
-    const { page, limit, offset } = req.pagination;
-    const userId = parseInt(req.params.userId);
+  logger.info("getBookingsByUserId called");
+  const { page, limit, offset } = req.pagination;
+  const userId = parseInt(req.params.userId);
 
-    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(0);
-    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+  const startDate = req.query.startDate
+    ? new Date(req.query.startDate)
+    : new Date(0);
+  const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
 
-    let filters = {};
-    if (req.query.status) {
-        if (['pending', 'confirmed', 'cancelled', 'completed'].includes(req.query.status)) {
-            logger.info(`Filtering bookings by status: ${req.query.status}`);
-            filters.status = req.query.status;
-        } else {
-            logger.warn(`Invalid status filter attempted: ${req.query.status}`);
-            return res.status(400).json({ error: "Invalid status filter." });
-        }
+  let filters = {};
+  if (req.query.status) {
+    if (
+      ["pending", "confirmed", "cancelled", "completed"].includes(
+        req.query.status
+      )
+    ) {
+      logger.info(`Filtering bookings by status: ${req.query.status}`);
+      filters.status = req.query.status;
+    } else {
+      logger.warn(`Invalid status filter attempted: ${req.query.status}`);
+      return res.status(400).json({ error: "Invalid status filter." });
     }
-    if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
-        logger.warn("Invalid date range provided for filtering bookings.");
-        return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
+  if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
+    logger.warn("Invalid date range provided for filtering bookings.");
+    return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
+  try {
+    logger.info(
+      `Retrieving bookings for userId: ${userId}, page: ${page}, limit: ${limit}`
+    );
+    const total = await prisma.bookings.count({
+      where: {
+        userId: userId,
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    const totalPages = Math.ceil(total / limit);
+    if (page > totalPages && totalPages !== 0) {
+      logger.warn("Page number exceeds total pages.");
+      return res
+        .status(400)
+        .json({ error: "Page number exceeds total pages." });
     }
-    try {
-        logger.info(`Retrieving bookings for userId: ${userId}, page: ${page}, limit: ${limit}`);
-        const total = await prisma.bookings.count({
-            where: { 
-                userId: userId, 
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-             }
-        });
-        const totalPages = Math.ceil(total / limit);
-        if (page > totalPages && totalPages !== 0) {
-            logger.warn("Page number exceeds total pages.");
-            return res.status(400).json({ error: "Page number exceeds total pages." });
-        }
-        const bookings = await prisma.bookings.findMany({
-            skip: offset,
-            take: limit,
-            where: {
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-            },
-        });
-        logger.info(`Retrieved ${bookings.length} bookings for userId: ${userId}.`);
-        return res.json({
-            page,
-            limit,
-            total,
-            totalPages,
-            data: bookings
-        });
-    } catch (error) {
-        logger.error(`Error retrieving bookings for userId: ${userId} - ${error.message}`);
-        res.status(500).json({ error: "Failed to retrieve bookings." });
-    }
+    const bookings = await prisma.bookings.findMany({
+      skip: offset,
+      take: limit,
+      where: {
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    logger.info(`Retrieved ${bookings.length} bookings for userId: ${userId}.`);
+    return res.json({
+      page,
+      limit,
+      total,
+      totalPages,
+      data: bookings,
+    });
+  } catch (error) {
+    logger.error(
+      `Error retrieving bookings for userId: ${userId} - ${error.message}`
+    );
+    res.status(500).json({ error: "Failed to retrieve bookings." });
+  }
 }
 
 async function getBookingsByEquipmentId(req, res) {
-    const { page, limit, offset } = req.pagination;
+  const { page, limit, offset } = req.pagination;
 
-    logger.info("getBookingsByEquipmentId called");
-    const equipmentId = parseInt(req.params.equipmentId);
+  logger.info("getBookingsByEquipmentId called");
+  const equipmentId = parseInt(req.params.equipmentId);
 
-    /**
-     *  Check if the equipment exists by calling the Inventory Service 
-     */
+  /**
+   *  Check if the equipment exists by calling the Inventory Service
+   */
 
-    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(0);
-    const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
+  const startDate = req.query.startDate
+    ? new Date(req.query.startDate)
+    : new Date(0);
+  const endDate = req.query.endDate ? new Date(req.query.endDate) : new Date();
 
-    let filters = {};
-    if (req.query.status) {
-        if (['pending', 'confirmed', 'cancelled', 'completed'].includes(req.query.status)) {
-            logger.info(`Filtering bookings by status: ${req.query.status}`);
-            filters.status = req.query.status;
-        } else {
-            logger.warn(`Invalid status filter attempted: ${req.query.status}`);
-            return res.status(400).json({ error: "Invalid status filter." });
-        }
+  let filters = {};
+  if (req.query.status) {
+    if (
+      ["pending", "confirmed", "cancelled", "completed"].includes(
+        req.query.status
+      )
+    ) {
+      logger.info(`Filtering bookings by status: ${req.query.status}`);
+      filters.status = req.query.status;
+    } else {
+      logger.warn(`Invalid status filter attempted: ${req.query.status}`);
+      return res.status(400).json({ error: "Invalid status filter." });
     }
-    if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
-        logger.warn("Invalid date range provided for filtering bookings.");
-        return res.status(400).json({ error: "Invalid startDate or endDate." });
-    }
+  }
+  if (isNaN(startDate) || isNaN(endDate) || startDate >= endDate) {
+    logger.warn("Invalid date range provided for filtering bookings.");
+    return res.status(400).json({ error: "Invalid startDate or endDate." });
+  }
 
-    try {
-        logger.info(`Retrieving bookings for equipmentId: ${equipmentId}, page: ${page}, limit: ${limit}`);
-        const total = await prisma.bookings.count({
-            where: { 
-                equipmentId: equipmentId, 
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-             }
-        });
-        const totalPages = Math.ceil(total / limit);
-        if (page > totalPages && totalPages !== 0) {
-            logger.warn("Page number exceeds total pages.");
-            return res.status(400).json({ error: "Page number exceeds total pages." });
-        }
-        logger.info(`Retrieving bookings for equipmentId: ${equipmentId}`);
-        const bookings = await prisma.bookings.findMany({
-            skip: offset,
-            take: limit,
-            where: { 
-                equipmentId: equipmentId,
-                startDate: { gte: startDate },
-                endDate: { lte: endDate },
-                ...filters
-            }
-        });
-        logger.info(`Retrieved ${bookings.length} bookings for equipmentId: ${equipmentId}.`);
-        res.json({
-            page,
-            limit,
-            total,
-            totalPages,
-            data: bookings
-        });
+  try {
+    logger.info(
+      `Retrieving bookings for equipmentId: ${equipmentId}, page: ${page}, limit: ${limit}`
+    );
+    const total = await prisma.bookings.count({
+      where: {
+        equipmentId: equipmentId,
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    const totalPages = Math.ceil(total / limit);
+    if (page > totalPages && totalPages !== 0) {
+      logger.warn("Page number exceeds total pages.");
+      return res
+        .status(400)
+        .json({ error: "Page number exceeds total pages." });
     }
-    catch (error) {
-        logger.error(`Error retrieving bookings for equipmentId: ${equipmentId} - ${error.message}`);
-        res.status(500).json({ error: "Failed to retrieve bookings." });
-    }
+    logger.info(`Retrieving bookings for equipmentId: ${equipmentId}`);
+    const bookings = await prisma.bookings.findMany({
+      skip: offset,
+      take: limit,
+      where: {
+        equipmentId: equipmentId,
+        startDate: { gte: startDate },
+        endDate: { lte: endDate },
+        ...filters,
+      },
+    });
+    logger.info(
+      `Retrieved ${bookings.length} bookings for equipmentId: ${equipmentId}.`
+    );
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages,
+      data: bookings,
+    });
+  } catch (error) {
+    logger.error(
+      `Error retrieving bookings for equipmentId: ${equipmentId} - ${error.message}`
+    );
+    res.status(500).json({ error: "Failed to retrieve bookings." });
+  }
 }
 
-module.exports = { 
-    deleteBooking,
-    updateBookingStatus, 
-    createBooking, 
-    getAllBookings, 
-    getBookingById, 
-    getBookingsByUserId,
-    getBookingsByEquipmentId,
-    checkAvailability
-    };
+module.exports = {
+  deleteBooking,
+  updateBookingStatus,
+  createBooking,
+  getAllBookings,
+  getBookingById,
+  getBookingsByUserId,
+  getBookingsByEquipmentId,
+  checkAvailability,
+};
