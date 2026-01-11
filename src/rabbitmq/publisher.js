@@ -1,6 +1,6 @@
 const amqp = require("amqplib");
 
-const RABBIT_URL = "amqp://rabbitmq";
+const RABBIT_URL = process.env.RABBITMQ_URL || "amqp://rabbitmq:5672";
 const QUEUE = "email_queue";
 
 async function publishEmailEvent(payload) {
