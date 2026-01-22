@@ -48,6 +48,7 @@ async function checkAvailability(req, res) {
     const count = await prisma.bookings.count({
       where: {
         equipmentId: equipmentId,
+        status: { ne: "CANCELLED" },
         AND: [{ startDate: { lte: end } }, { endDate: { gte: start } }],
       },
     });
@@ -349,7 +350,7 @@ async function deleteBooking(req, res) {
       logger.warn(`Booking with ID: ${bookingId} not found.`);
       return res.status(404).json({ error: "Booking not found." });
     }
-    if (booking.status !== "cancelled") {
+    if (booking.status !== "CANCELLED") {
       logger.warn(
         `Booking with ID: ${bookingId} cannot be deleted as its status is not 'cancelled'.`
       );
