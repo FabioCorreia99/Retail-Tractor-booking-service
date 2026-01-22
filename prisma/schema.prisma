@@ -19,7 +19,7 @@ model Bookings {
   status     BookingStatus @default(PENDING)
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
-  paymentId  Int?
+  paymentId  String?
   notes      String?
 }
 

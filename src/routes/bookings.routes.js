@@ -112,50 +112,7 @@ router.get('/:id',
     } 
     */
     authenticateUserToken, bookingsController.getBookingById);
-
-router.put('/:id/status', 
-    /*
-    #swagger.tags = ['Bookings']
-    #swagger.description = 'Endpoint to update the status of a booking.'
-    #swagger.parameters['id'] = {
-        in: 'path', 
-        description: 'ID of the booking to update.',
-        required: true,
-        type: 'integer'
-    }
-    #swagger.parameters['BookingStatusUpdate'] = {  
-        in: 'body',
-        description: 'New status for the booking.',
-        required: true,
-        schema: { $ref: '#/definitions/BookingStatusUpdate' }
-    }
-    #swagger.responses[200] = {
-        description: 'Booking status updated successfully.',    
-        schema: { $ref: '#/definitions/Booking' }
-    }
-    #swagger.responses[400] = {
-        description: 'Bad Request. Invalid status value.',
-        schema: { error: "Invalid status value." }
-    }
-    #swagger.responses[401] = {
-        description: 'Unauthorized. Booking token missing or invalid.',
-        schema: { error: "Booking token missing." }
-    }       
-    #swagger.responses[403] = {
-        description: 'Forbidden. Invalid booking token.',
-        schema: { error: "Invalid booking token." }
-    }
-    #swagger.responses[404] = {
-        description: 'Booking not found.',  
-        schema: { error: "Booking not found." }
-    }   
-    #swagger.responses[500] = {
-        description: 'Internal Server Error.',
-        schema: { error: "Internal Server Error" }
-    }
-    */
-    authenticateBookingToken, bookingsController.updateBookingStatus);
-
+    
 router.delete('/:id',
     /*
     #swagger.tags = ['Bookings']
@@ -324,5 +281,7 @@ router.get('/check-availability',
     }
     */
     bookingsController.checkAvailability);
+
+router.post('/internal/:id/payment', bookingsController.updateBookingFromWebhook);
 
 module.exports = router;

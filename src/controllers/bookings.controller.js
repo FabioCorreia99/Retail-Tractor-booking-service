@@ -5,48 +5,6 @@ const prisma = require("../config/db"); // Import prisma instance
 const logger = require("../utils/logger");
 const axios = require("axios");
 
-async function updateBookingStatus(req, res) {
-  const bookingId = req.params.id;
-  const { status, notes } = req.body;
-  // Atualizar o status da reserva no banco de dados
-  logger.info(`Updating booking ID: ${bookingId} to status: ${status}`);
-
-  if (!["pending", "confirmed", "cancelled", "completed"].includes(status)) {
-    logger.warn(`Invalid status value attempted: ${status}`);
-    return res.status(400).json({ error: "Invalid status value." });
-  }
-
-  if (status === "cancelled" && (!notes || notes.trim() === "")) {
-    logger.warn("Cancellation attempted without providing notes.");
-    return res
-      .status(400)
-      .json({ error: "Notes are required when cancelling a booking." });
-  }
-
-  // Update the booking status in the database
-  try {
-    await prisma.bookings.update({
-      where: { id: bookingId },
-      data: { status, notes },
-    });
-
-    if (status === "cancelled") {
-      await publishEmailEvent({
-        to: req.user.email,
-        subject: "Booking cancelled",
-        message: `Your booking #${bookingId} was cancelled. Reason: ${notes}`,
-      });
-    }
-  } catch (error) {
-    logger.error(`Error updating booking status: ${error.message}`);
-    return res.status(500).json({ error: "Failed to update booking status." });
-  }
-
-  res.json({
-    message: "Booking status updated successfully.",
-  });
-}
-
 async function checkAvailability(req, res) {
   const { equipmentId, startDate, endDate } = req.body;
 
@@ -219,13 +177,6 @@ async function createBooking(req, res) {
       message: `Your booking #${newBooking.id} was created successfully.`,
     });
 
-    // logger.info("Generating internal booking token for Payments Service...");
-    // const internalToken = generateBookingToken({
-    //     bookingId: newBooking.id,
-    //     userId: req.user.sub,
-    //     role: "internal"
-    // });
-
     let checkoutUrl = null;
 
     const postParaPagamento = {
@@ -259,7 +210,7 @@ async function createBooking(req, res) {
     // 2. SEGUNDO: Gerar o link de pagamento para esse Post
     // Agora chamas o endpoint /buy que o teu colega já tem
     const buyResponse = await axios.get(
-      `http://payments-service:8080/payments/posts/${createdPostId}/buy`,
+      `http://payments-service:8080/payments/posts/${createdPostId}/buy?bookingId=${newBooking.id}`,
       {
         headers: {
           Authorization: req.headers.authorization,
@@ -271,7 +222,6 @@ async function createBooking(req, res) {
     const stripeUrl = buyResponse.data.url;
     logger.info(`Link de pagamento gerado: ${stripeUrl}`);
 
-    // Retornas ao teu frontend o link para o user pagar
     res.status(201).json({
       booking: newBooking,
       paymentUrl: stripeUrl,
@@ -574,13 +524,50 @@ async function getBookingsByEquipmentId(req, res) {
   }
 }
 
+async function updateBookingFromWebhook(req, res) {
+    const { id } = req.params; // bookingId vindo do URL
+    const { status, paymentId, notes } = req.body; // Dados vindos do Java
+
+    logger.info(`Webhook recebido para Booking #${id}. Novo status: ${status}`);
+
+    // Traduzir status do Stripe (PAID/FAILED) para o status do teu sistema
+    let finalStatus = "PENDING";
+    if (status === "PAID") {
+        finalStatus = "CONFIRMED"; // ou "paid"
+    } else if (status === "FAILED") {
+        finalStatus = "CANCELLED"; // ou "failed"
+    }
+
+    try {
+        await prisma.bookings.update({
+            where: { id: id},
+            data: {
+                status: finalStatus,
+                paymentId: paymentId,
+                notes: notes ? notes : `status updated via Stripe Webhook: ${status}`
+            }
+        });
+
+        logger.info(`Booking #${id} atualizada com sucesso.`);
+        return res.status(200).json({ message: "Webhook processed" });
+
+    } catch (error) {
+        logger.error(`Erro ao processar webhook para Booking #${id}: ${error.message}`);
+        // Se a booking não existir
+        if (error.code === 'P2025') {
+            return res.status(404).json({ error: "Booking not found" });
+        }
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+}
+
 module.exports = {
   deleteBooking,
-  updateBookingStatus,
   createBooking,
   getAllBookings,
   getBookingById,
   getBookingsByUserId,
   getBookingsByEquipmentId,
   checkAvailability,
+  updateBookingFromWebhook,
 };
