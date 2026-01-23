@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 3002
 
-CMD ["npm", "start"]
+CMD ["sh", "-c", "npx prisma generate && node server.js"]
