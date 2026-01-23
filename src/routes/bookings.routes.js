@@ -236,7 +236,7 @@ router.get('/equipment/:equipmentId',
         schema: { error: "Internal Server Error" }
     }
     */
-    authenticateUserToken , paginationMiddleware,/* checks if the user is authorized to view bookings for this equipment */  bookingsController.getBookingsByEquipmentId);
+    authenticateUserToken , paginationMiddleware, bookingsController.getBookingsByEquipmentId);
 
 router.get('/check-availability',
     /*

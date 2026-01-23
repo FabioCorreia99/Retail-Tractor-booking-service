@@ -449,10 +449,30 @@ async function getBookingsByEquipmentId(req, res) {
   logger.info("getBookingsByEquipmentId called");
   const equipmentId = parseInt(req.params.equipmentId);
 
-  /**
-   *  Check if the equipment exists by calling the Inventory Service
-   */
+  const inventoryResponse = await axios.post(
+    "http://localhost:3001/graphql",
+    {
+      query: `
+          query Item {
+              item(id: $id) {
+                id
+              }
+          }`,
+      variables: { id: equipmentId },
+    }
+  );
 
+  console.log(inventoryResponse);
+
+  if (!inventoryResponse.data.data.item) {
+    logger.warn(
+      `Equipment with ID: ${equipmentId} not found in Inventory Service.`
+    );
+    return res.status(404).json({ error: "Equipment not found." });
+  }
+  if (inventoryResponse.data.data.item.userId != req.user.sub) {
+    return res.status(403).json({ error: "Forbidden: You do not own this equipment." });
+  }
   const startDate = req.query.startDate
     ? new Date(req.query.startDate)
     : new Date(0);
