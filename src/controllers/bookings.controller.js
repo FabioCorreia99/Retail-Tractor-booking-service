@@ -30,6 +30,13 @@ async function checkAvailability(req, res) {
                 }
             }`,
         variables: { id: equipmentId },
+      },
+      {
+        // Reenvia o token exato que recebemos do Postman
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json",
+        },
       }
     );
 
@@ -445,20 +452,29 @@ async function getBookingsByUserId(req, res) {
 
 async function getBookingsByEquipmentId(req, res) {
   const { page, limit, offset } = req.pagination;
+  const authHeader = req.headers.authorization;
 
   logger.info("getBookingsByEquipmentId called");
   const equipmentId = parseInt(req.params.equipmentId);
 
   const inventoryResponse = await axios.post(
-    "http://localhost:3001/graphql",
+    "http://inventory-service:3001/graphql",
     {
       query: `
-          query Item {
+          query Item($id: ID!){
               item(id: $id) {
                 id
+                userId
               }
           }`,
       variables: { id: equipmentId },
+    },
+    {
+      // Reenvia o token exato que recebemos do Postman
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+      },
     }
   );
 
