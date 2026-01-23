@@ -585,6 +585,31 @@ async function updateBookingFromWebhook(req, res) {
             }
         });
 
+        if (finalStatus === "CONFIRMED") {
+            try {
+                // Precisamos do email do user. Vamos buscá-lo ao users-service usando o userId da reserva
+                logger.info(`Fetching user email for userId: ${updatedBooking.userId}`);
+                
+                const userResponse = await axios.get(`http://users-service:3003/users/${updatedBooking.userId}`);
+                
+                if (userResponse.data && userResponse.data.email) {
+                    const userEmail = userResponse.data.email;
+                    
+                    await publishEmailEvent({
+                        to: userEmail,
+                        subject: "Payment Confirmed! Rate your experience",
+                        message: `Hello! Payment for your booking #${id} has been confirmed.\n\nPlease leave a review for the equipment at the following link: http://localhost:8081/reviews/`
+                    });
+                    
+                    logger.info(`Email de convite para review enviado para ${userEmail}`);
+                } else {
+                    logger.warn(`Não foi possível obter o email para o user ${updatedBooking.userId}`);
+                }
+            } catch (emailError) {
+                logger.error(`Falha ao enviar email de review: ${emailError.message}`);
+            }
+        }
+
         logger.info(`Booking #${id} atualizada com sucesso.`);
         return res.status(200).json({ message: "Webhook processed" });
 
