@@ -3,13 +3,13 @@ const app = express();
 const swaggerUi = require("swagger-ui-express");
 const swaggerFile = require("../swagger-output.json");
 
-app.use("/doc", swaggerUi.serve, swaggerUi.setup(swaggerFile));
-
 app.use(express.json());
 
 const logger = require('./utils/logger');
 
 const { errorHandler } = require("./middlewares/error-handler");
+
+app.use("/bookings/doc", swaggerUi.serve, swaggerUi.setup(swaggerFile));
 
 app.use("/bookings", require("./routes/bookings.routes.js"));
 
